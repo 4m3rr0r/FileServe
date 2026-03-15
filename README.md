@@ -33,8 +33,6 @@ The script automatically installs required dependencies and supports multiple tr
 
 * **Automatic Dependency Installation**
 
-* **Auto IP Detection**
-  Prefers `tun0` (VPN) then `eth0`.
 
 ---
 
